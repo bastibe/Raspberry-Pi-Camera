@@ -1,3 +1,6 @@
+# You need to set the memory split in raspi-config, advanced to 256
+# for the highest resolution capture to work.
+
 from PySide2 import QtCore
 from PySide2 import QtWidgets
 from PySide2 import QtGui
@@ -16,7 +19,7 @@ class Viewfinder(QtWidgets.QWidget):
         # initialize the camera:
         self.camera = PiCamera()
         self.camera.resolution = self.size
-        self.camera.framerate = 60
+        self.camera.framerate = 30
 
     def paintEvent(self, event):
         with PiRGBArray(self.camera) as output:
@@ -28,7 +31,25 @@ class Viewfinder(QtWidgets.QWidget):
         self.update()
 
     def mousePressEvent(self, event):
-        self.closeWindow.emit()
+        # top right corner: close
+        if event.x() > (self.size[0] - 40) and event.y() < 40:
+            self.closeWindow.emit()
+        # horizontal center: take a picture
+        if event.x() > 200 and event.x() < (self.size[0] - 200):
+            self.takePicture()
+
+    def takePicture(self):
+        # set highest possible resolution:
+        self.camera.resolution = self.camera.MAX_RESOLUTION
+
+        with PiRGBArray(self.camera) as output:
+            self.camera.capture(output, 'rgb')
+            image = output.array
+        print(image.shape); sys.stdout.flush()
+
+        # reset to old resolution:
+        self.camera.resolution = self.size
+        self.camera.framerate = 30
 
 
 class FullScreenWindow(QtWidgets.QMainWindow):
