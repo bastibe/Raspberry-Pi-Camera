@@ -8,6 +8,7 @@ from picamera.array import PiRGBArray
 from picamera import PiCamera
 import time
 import sys
+from threading import Thread
 
 
 class ValueSlider(QtWidgets.QWidget):
@@ -93,6 +94,41 @@ class ValueSlider(QtWidgets.QWidget):
     def value(self):
         return self.steps[self.index]
 
+import io
+class CaptureThread(Thread):
+    def __init__(self, camera):
+        super().__init__()
+        self.camera = camera
+        self.last_capture = bytearray(800 * 480 * 3)
+        self.should_stop = False
+        self.should_pause = False
+
+    def run(self):
+        stream = io.BytesIO()
+        while True:
+            if self.should_pause:
+                time.sleep(0.1)
+                continue
+            for _ in self.camera.capture_continuous(stream, format='rgb', use_video_port=True):
+                stream.seek(0)
+                stream.readinto1(self.last_capture)
+                stream.truncate()
+                stream.seek(0)
+                if self.should_stop or self.should_pause:
+                    break
+            if self.should_stop:
+                break
+
+    def stop(self):
+        self.should_stop = True
+
+    def pause(self):
+        self.should_pause = True
+        time.sleep(0.1) # wait for capturing to stop
+
+    def unpause(self):
+        self.should_pause = False
+
 
 class Viewfinder(QtWidgets.QWidget):
     closeWindow = QtCore.Signal()
@@ -118,6 +154,10 @@ class Viewfinder(QtWidgets.QWidget):
         self.camera.resolution = self.size
         self.camera.framerate = 30
 
+        time.sleep(0.2)
+        print(repr(self.camera.framerate))
+        sys.stdout.flush()
+
         # keep redrawing:
         self.setCursor(QtCore.Qt.BlankCursor)
         self.paintScheduler = QtCore.QTimer(self)
@@ -126,10 +166,11 @@ class Viewfinder(QtWidgets.QWidget):
         self.paintScheduler.timeout.connect(self.update)
         self.paintScheduler.start()
 
+        self.recorder = CaptureThread(self.camera)
+        self.recorder.start()
+
     def paintEvent(self, event):
-        with PiRGBArray(self.camera) as output:
-            self.camera.capture(output, 'rgb', use_video_port=True)
-            image = QtGui.QImage(output.array, *self.size, self.size[0]*3, QtGui.QImage.Format_RGB888)
+        image = QtGui.QImage(self.recorder.last_capture, *self.size, self.size[0]*3, QtGui.QImage.Format_RGB888)
 
         painter = QtGui.QPainter(self)
         painter.drawImage(self.rect(), image)
@@ -153,13 +194,22 @@ class Viewfinder(QtWidgets.QWidget):
     def mousePressEvent(self, event):
         # top right corner: close
         if event.x() > (self.size[0] - 40) and event.y() < 40:
+            self.recorder.stop()
+            self.recorder.join(0.1)
             self.closeWindow.emit()
         # horizontal center: take a picture
         if event.x() > 200 and event.x() < (self.size[0] - 200):
             self.takePicture()
 
     def takePicture(self):
+        # pause live view, as we can't have multiple threads
+        # reading from the same sensor:
+        self.recorder.pause()
+
+        # save off previous framerate, as the resolution change
+        # might change it:
         old_framerate = self.camera.framerate
+
         # set highest possible resolution:
         self.camera.resolution = self.camera.MAX_RESOLUTION
 
@@ -168,9 +218,12 @@ class Viewfinder(QtWidgets.QWidget):
             image = output.array
         print(image.shape); sys.stdout.flush()
 
-        # reset to old resolution:
+        # reset to old resolution and framerate:
         self.camera.resolution = self.size
         self.camera.framerate = old_framerate
+
+        # unpause live view:
+        self.recorder.unpause()
 
     def setISO(self, iso):
         self.camera.iso = iso
