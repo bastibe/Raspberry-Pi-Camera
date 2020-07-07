@@ -1,14 +1,17 @@
 # You need to set the memory split in raspi-config, advanced to 256
 # for the highest resolution capture to work.
 
+import sys
+import time
+import argparse
+import textwrap
+from threading import Thread
 from PySide2 import QtCore
 from PySide2 import QtWidgets
 from PySide2 import QtGui
 from picamera.array import PiRGBArray
 from picamera import PiCamera
-import time
-import sys
-from threading import Thread
+import pathlib
 
 
 class ValueSlider(QtWidgets.QWidget):
@@ -133,9 +136,11 @@ class CaptureThread(Thread):
 class Viewfinder(QtWidgets.QWidget):
     closeWindow = QtCore.Signal()
 
-    def __init__(self, parent, width, height):
+    def __init__(self, parent, width, height, output_path, file_prefix):
         super().__init__(parent)
         self.size = (width, height)
+        self.output_path = pathlib.Path(output_path).expanduser()
+        self.file_prefix = file_prefix
 
         # exposure_compensation
         shutter_speeds = [0, 8, 15, 30, 60, 125, 250, 500, 1000, 2000, 4000, 8000]
@@ -213,10 +218,20 @@ class Viewfinder(QtWidgets.QWidget):
         # set highest possible resolution:
         self.camera.resolution = self.camera.MAX_RESOLUTION
 
-        with PiRGBArray(self.camera) as output:
-            self.camera.capture(output, 'rgb')
-            image = output.array
-        print(image.shape); sys.stdout.flush()
+        try:
+            image_files = list(self.output_path.glob(f'{self.file_prefix}*.jpg'))
+            if image_files:
+                last_file = sorted(image_files)[-1]
+                last_index = int(last_file.name[len(self.file_prefix):-4])
+            else:
+                last_index = 0
+            new_file = self.output_path / f'{self.file_prefix}{last_index+1:04d}.jpg'
+            print(f'saving image to {new_file}')
+            sys.stdout.flush()
+            with new_file.open('wb') as f:
+                self.camera.capture(f, format='jpeg', bayer=True)
+        except Exception as err:
+            print('Error:', err)
 
         # reset to old resolution and framerate:
         self.camera.resolution = self.size
@@ -244,8 +259,8 @@ class Viewfinder(QtWidgets.QWidget):
             self.camera.shutter_speed = new_speed
 
 
-class FullScreenWindow(QtWidgets.QMainWindow):
-    def __init__(self):
+class RaspiCamera(QtWidgets.QMainWindow):
+    def __init__(self, output_path, file_prefix):
         super().__init__(flags=QtCore.Qt.FramelessWindowHint)
         self.setWindowTitle("Viewfinder")
 
@@ -253,7 +268,7 @@ class FullScreenWindow(QtWidgets.QMainWindow):
         screenwidth = screensize.x() + screensize.width()
         screenheight = screensize.y() + screensize.height()
 
-        main_widget = Viewfinder(self, screenwidth, screenheight)
+        main_widget = Viewfinder(self, screenwidth, screenheight, output_path, file_prefix)
         self.setCentralWidget(main_widget)
         main_widget.closeWindow.connect(self.close)
 
@@ -261,7 +276,20 @@ class FullScreenWindow(QtWidgets.QMainWindow):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent("""
+        Shows a full screen window that transforms the Raspberry Pi into a camera.
+
+        The app is meant to be used with a touch screen. No mouse cursor is shown.
+        Tap the top right corner to exit the app.
+        Tap the center to take a picture.
+        """))
+    parser.add_argument('--output-path', '-p', help="Where to save pictures", default="~/Pictures/")
+    parser.add_argument('--file-prefix', '-f', help="Beginning of file name", default="RPCAM")
+    args = parser.parse_args()
+
     app = QtWidgets.QApplication(sys.argv)
-    window = FullScreenWindow()
+    window = RaspiCamera(output_path=args.output_path, file_prefix=args.file_prefix)
     window.show()
     sys.exit(app.exec_())
