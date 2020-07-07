@@ -71,6 +71,10 @@ class ValueSlider(QtWidgets.QWidget):
 
     def mouseReleaseEvent(self, event):
         offset = event.y() - self.dragOrigin
+
+        if offset == 0: # a click
+            offset = self.height()/2 - event.y()
+
         index = round(self.index - offset / 40)
         if index < 0:
             index = 0
@@ -100,12 +104,13 @@ class Viewfinder(QtWidgets.QWidget):
         # exposure_compensation
         shutter_speeds = [0, 8, 15, 30, 60, 125, 250, 500, 1000, 2000, 4000, 8000]
         shutter_slider = ValueSlider(self, "Shutter", shutter_speeds , 0)
-        shutter_slider.setGeometry(0, 40, 200, height-40)
+        shutter_slider.setGeometry(0, 40, 200, height-80)
         shutter_slider.valueChanged.connect(self.setShutterSpeed)
+        shutter_label = QtWidgets.QLabel("")
 
         isos = [0, 100, 200, 320, 400, 640, 800, 1600]
         iso_slider = ValueSlider(self, "ISO", isos, 0)
-        iso_slider.setGeometry(width-200, 40, 200, height-40)
+        iso_slider.setGeometry(width-200, 40, 200, height-80)
         iso_slider.valueChanged.connect(self.setISO)
 
         # initialize the camera:
@@ -129,6 +134,22 @@ class Viewfinder(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.drawImage(self.rect(), image)
 
+        pen = QtGui.QPen("white")
+        pen.setWidth(2)
+        painter.setPen(pen)
+
+        font = self.font()
+        font.setPixelSize(30)
+        painter.setFont(font)
+
+        painter.drawText(0, self.height()-40, 200, 40,
+                         QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                         f'{str(self.camera.exposure_speed/1e6)} s')
+        painter.drawText(self.width()-200, self.height()-40, 200, 40,
+                         QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                         f'{str(self.camera.analog_gain * self.camera.digital_gain)}')
+
+
     def mousePressEvent(self, event):
         # top right corner: close
         if event.x() > (self.size[0] - 40) and event.y() < 40:
@@ -138,6 +159,7 @@ class Viewfinder(QtWidgets.QWidget):
             self.takePicture()
 
     def takePicture(self):
+        old_framerate = self.camera.framerate
         # set highest possible resolution:
         self.camera.resolution = self.camera.MAX_RESOLUTION
 
@@ -148,16 +170,25 @@ class Viewfinder(QtWidgets.QWidget):
 
         # reset to old resolution:
         self.camera.resolution = self.size
-        self.camera.framerate = 30
+        self.camera.framerate = old_framerate
 
     def setISO(self, iso):
         self.camera.iso = iso
 
     def setShutterSpeed(self, shutter_speed):
-        # below 60, adjust frame rate to allow for slower shutters:
-        if shutter_speed <= 60:
+        if shutter_speed == 0:
+            self.camera.shutter_speed = 0
+            self.camera.framerate = 30
+            return
+
+        new_speed = int(1e6/shutter_speed)
+        old_speed = self.camera.exposure_speed
+
+        if shutter_speed > 30:
+            self.camera.shutter_speed = new_speed
+        else:
             self.camera.framerate = shutter_speed
-        self.camera.shutter_speed = int(1e6/shutter_speed) # in microseconds
+            self.camera.shutter_speed = new_speed
 
 
 class FullScreenWindow(QtWidgets.QMainWindow):
