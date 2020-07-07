@@ -159,10 +159,6 @@ class Viewfinder(QtWidgets.QWidget):
         self.camera.resolution = self.size
         self.camera.framerate = 30
 
-        time.sleep(0.2)
-        print(repr(self.camera.framerate))
-        sys.stdout.flush()
-
         # keep redrawing:
         self.setCursor(QtCore.Qt.BlankCursor)
         self.paintScheduler = QtCore.QTimer(self)
@@ -231,7 +227,7 @@ class Viewfinder(QtWidgets.QWidget):
             with new_file.open('wb') as f:
                 self.camera.capture(f, format='jpeg', bayer=True)
         except Exception as err:
-            print('Error:', err)
+            print('Error saving image:', err)
 
         # reset to old resolution and framerate:
         self.camera.resolution = self.size
