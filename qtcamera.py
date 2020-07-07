@@ -9,6 +9,87 @@ from picamera import PiCamera
 import time
 import sys
 
+
+class ValueSlider(QtWidgets.QWidget):
+    valueChanged = QtCore.Signal(int)
+
+    def __init__(self, parent, name, steps, index=None):
+        super().__init__(parent)
+        self.steps = steps
+        self.index = index
+        self.name = name
+        self.dragOrigin = None
+        self.offset = 0
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        pen = QtGui.QPen("white")
+        pen.setWidth(2)
+        painter.setPen(pen)
+
+        font = self.font()
+        font.setPixelSize(40)
+        painter.setFont(font)
+
+        painter.drawText(0, 0, self.width(), 40,
+                         QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                         self.name)
+
+        font = self.font()
+        font.setPixelSize(34)
+        painter.setFont(font)
+
+        painter.setClipRect(0, 40, self.width(), self.height()-40)
+        for idx in range(len(self.steps)):
+            y = 40 * (idx - self.index) + self.height()/2 - 20 + self.offset
+            font = self.font()
+            font.setBold(idx == self.index)
+            painter.setFont(font)
+            painter.drawText(0, y, self.width(), 40,
+                             QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
+                             str(self.steps[idx]) if self.steps[idx] != 0 else "Auto")
+        painter.drawRect(0, self.height()/2-20, self.width(), 40)
+
+    def mousePressEvent(self, event):
+        self.dragOrigin = event.y()
+
+    def mouseMoveEvent(self, event):
+        self.offset = event.y() - self.dragOrigin
+        index = round(self.index - self.offset / 40)
+        if index < 0:
+            index = 0
+        if index >= len(self.steps):
+            index = len(self.steps) - 1
+
+        index_delta = self.index - index
+        if index_delta != 0:
+            self.index = index
+            self.valueChanged.emit(self.value)
+
+        self.offset -= 40 * index_delta
+        self.dragOrigin += 40 * index_delta
+
+    def mouseReleaseEvent(self, event):
+        offset = event.y() - self.dragOrigin
+        index = round(self.index - offset / 40)
+        if index < 0:
+            index = 0
+        if index >= len(self.steps):
+            index = len(self.steps) - 1
+
+        index_delta = self.index - index
+        if index_delta != 0:
+            self.index = index
+            self.valueChanged.emit(self.value)
+
+        self.offset = 0
+        self.dragOrigin = None
+
+    @property
+    def value(self):
+        return self.steps[self.index]
+
+
 class Viewfinder(QtWidgets.QWidget):
     closeWindow = QtCore.Signal()
 
@@ -16,11 +97,29 @@ class Viewfinder(QtWidgets.QWidget):
         super().__init__(parent)
         self.size = (width, height)
 
+        # exposure_compensation
+        shutter_speeds = [0, 8, 15, 30, 60, 125, 250, 500, 1000, 2000, 4000, 8000]
+        shutter_slider = ValueSlider(self, "Shutter", shutter_speeds , 0)
+        shutter_slider.setGeometry(0, 40, 200, height-40)
+        shutter_slider.valueChanged.connect(self.setShutterSpeed)
+
+        isos = [0, 100, 200, 320, 400, 640, 800, 1600]
+        iso_slider = ValueSlider(self, "ISO", isos, 0)
+        iso_slider.setGeometry(width-200, 40, 200, height-40)
+        iso_slider.valueChanged.connect(self.setISO)
+
         # initialize the camera:
         self.camera = PiCamera()
         self.camera.resolution = self.size
         self.camera.framerate = 30
+
+        # keep redrawing:
         self.setCursor(QtCore.Qt.BlankCursor)
+        self.paintScheduler = QtCore.QTimer(self)
+        self.paintScheduler.setInterval(1/60*1000)
+        self.paintScheduler.setSingleShot(False)
+        self.paintScheduler.timeout.connect(self.update)
+        self.paintScheduler.start()
 
     def paintEvent(self, event):
         with PiRGBArray(self.camera) as output:
@@ -29,7 +128,6 @@ class Viewfinder(QtWidgets.QWidget):
 
         painter = QtGui.QPainter(self)
         painter.drawImage(self.rect(), image)
-        self.update()
 
     def mousePressEvent(self, event):
         # top right corner: close
@@ -51,6 +149,15 @@ class Viewfinder(QtWidgets.QWidget):
         # reset to old resolution:
         self.camera.resolution = self.size
         self.camera.framerate = 30
+
+    def setISO(self, iso):
+        self.camera.iso = iso
+
+    def setShutterSpeed(self, shutter_speed):
+        # below 60, adjust frame rate to allow for slower shutters:
+        if shutter_speed <= 60:
+            self.camera.framerate = shutter_speed
+        self.camera.shutter_speed = int(1e6/shutter_speed) # in microseconds
 
 
 class FullScreenWindow(QtWidgets.QMainWindow):
