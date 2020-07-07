@@ -20,6 +20,7 @@ class Viewfinder(QtWidgets.QWidget):
         self.camera = PiCamera()
         self.camera.resolution = self.size
         self.camera.framerate = 30
+        self.setCursor(QtCore.Qt.BlankCursor)
 
     def paintEvent(self, event):
         with PiRGBArray(self.camera) as output:
