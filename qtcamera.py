@@ -115,7 +115,8 @@ class CaptureThread(threading.Thread):
     def __init__(self, camera):
         super().__init__()
         self.camera = camera
-        self.last_capture = bytearray(800 * 480 * 3)
+        width, height = self.camera.resolution
+        self.last_capture = bytearray(width * height * 3)
         self.should_stop = False
         self.should_pause = False
 
