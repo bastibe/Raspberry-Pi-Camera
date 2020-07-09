@@ -5,13 +5,14 @@ import sys
 import time
 import argparse
 import textwrap
-from threading import Thread
+import pathlib
+import threading
+import gpiozero
 from PySide2 import QtCore
 from PySide2 import QtWidgets
 from PySide2 import QtGui
 from picamera.array import PiRGBArray
 from picamera import PiCamera
-import pathlib
 
 
 class ValueSlider(QtWidgets.QWidget):
@@ -53,6 +54,18 @@ class ValueSlider(QtWidgets.QWidget):
                              QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter,
                              str(self.steps[idx]) if self.steps[idx] != 0 else "Auto")
         painter.drawRect(0, self.height()/2-20, self.width(), 40)
+
+    def increment(self, increment):
+        index = self.index + increment
+        if index < 0:
+            index = 0
+        if index >= len(self.steps):
+            index = len(self.steps) - 1
+
+        index_delta = self.index - index
+        if index_delta != 0:
+            self.index = index
+            self.valueChanged.emit(self.value)
 
     def mousePressEvent(self, event):
         self.dragOrigin = event.y()
@@ -98,7 +111,7 @@ class ValueSlider(QtWidgets.QWidget):
         return self.steps[self.index]
 
 import io
-class CaptureThread(Thread):
+class CaptureThread(threading.Thread):
     def __init__(self, camera):
         super().__init__()
         self.camera = camera
@@ -144,20 +157,33 @@ class Viewfinder(QtWidgets.QWidget):
 
         # exposure_compensation
         shutter_speeds = [0, 8, 15, 30, 60, 125, 250, 500, 1000, 2000, 4000, 8000]
-        shutter_slider = ValueSlider(self, "Shutter", shutter_speeds , 0)
-        shutter_slider.setGeometry(0, 40, 200, height-80)
-        shutter_slider.valueChanged.connect(self.setShutterSpeed)
-        shutter_label = QtWidgets.QLabel("")
+        self.shutter_slider = ValueSlider(self, "Shutter", shutter_speeds , 0)
+        self.shutter_slider.setGeometry(0, 40, 200, height-80)
+        self.shutter_slider.valueChanged.connect(self.setShutterSpeed)
 
         isos = [0, 100, 200, 320, 400, 640, 800, 1600]
-        iso_slider = ValueSlider(self, "ISO", isos, 0)
-        iso_slider.setGeometry(width-200, 40, 200, height-80)
-        iso_slider.valueChanged.connect(self.setISO)
+        self.iso_slider = ValueSlider(self, "ISO", isos, 0)
+        self.iso_slider.setGeometry(width-200, 40, 200, height-80)
+        self.iso_slider.valueChanged.connect(self.setISO)
 
         # initialize the camera:
         self.camera = PiCamera()
         self.camera.resolution = self.size
         self.camera.framerate = 30
+
+        # connect the physical shutter button:
+        self.shutterButton = gpiozero.Button(4)
+        self.shutterButton.when_pressed = self.takePicture
+        # connect the physical shutter encoder:
+        self.shutterEncoder1 = gpiozero.Button(17, pull_up=False)
+        self.shutterEncoder2 = gpiozero.Button(18, pull_up=False)
+        self.shutterEncoder1.when_pressed = self.shutterEncoderEvent
+        self.shutterEncoder2.when_pressed = self.shutterEncoderEvent
+        # connect the physical ISO encoder:
+        self.isoEncoder1 = gpiozero.Button(22, pull_up=False)
+        self.isoEncoder2 = gpiozero.Button(23, pull_up=False)
+        self.isoEncoder1.when_pressed = self.isoEncoderEvent
+        self.isoEncoder2.when_pressed = self.isoEncoderEvent
 
         # keep redrawing:
         self.setCursor(QtCore.Qt.BlankCursor)
@@ -169,6 +195,16 @@ class Viewfinder(QtWidgets.QWidget):
 
         self.recorder = CaptureThread(self.camera)
         self.recorder.start()
+
+    def shutterEncoderEvent(self):
+        increment = self.shutterEncoder1.value - self.shutterEncoder2.value
+        if increment != 0:
+            self.shutter_slider.increment(increment)
+
+    def isoEncoderEvent(self):
+        increment = self.isoEncoder1.value - self.isoEncoder2.value
+        if increment != 0:
+            self.iso_slider.increment(increment)
 
     def paintEvent(self, event):
         image = QtGui.QImage(self.recorder.last_capture, *self.size, self.size[0]*3, QtGui.QImage.Format_RGB888)
